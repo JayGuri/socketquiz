@@ -11,21 +11,25 @@ const app = express()
 const server = createServer(app)
 const io = new Server(server, {
   cors: {
-    origin: "*", 
+    origin: "*",
     methods: ["GET", "POST"],
   },
 })
 
 const PORT = process.env.PORT || 3001
 
+// Serve static files from the 'public' directory
 app.use(express.static(join(__dirname, "public")))
 
+// Serve index.html for the root route
 app.get("/", (req, res) => {
   res.sendFile(join(__dirname, "public", "index.html"))
 })
 
+// Store rooms, their participants, and room-specific game states
 const rooms = new Map()
 
+// Quiz questions
 const quizQuestions = [
   { question: "What is the capital of France?", options: ["London", "Berlin", "Paris", "Madrid"], correct: 2 },
   { question: "Which planet is known as the Red Planet?", options: ["Mars", "Venus", "Jupiter", "Saturn"], correct: 0 },
@@ -60,7 +64,6 @@ io.on("connection", (socket) => {
 
   socket.on("join room", (roomId) => {
     console.log(`User ${socket.id} attempting to join room: ${roomId}`)
-    socket.join(roomId)
 
     if (!rooms.has(roomId)) {
       rooms.set(roomId, {
@@ -68,31 +71,61 @@ io.on("connection", (socket) => {
         gameState: {
           started: false,
           currentQuestion: 0,
-          questions: [...quizQuestions], 
+          questions: [...quizQuestions],
           scores: {},
+          readyPlayers: new Set(),
         },
       })
     }
 
     const room = rooms.get(roomId)
+
+    if (room.gameState.started) {
+      socket.emit("game in progress")
+      return
+    }
+
+    if (room.participants.size >= 5) {
+      socket.emit("room full")
+      return
+    }
+
+    socket.join(roomId)
     room.participants.add(socket.id)
 
     console.log(`Room ${roomId} now has ${room.participants.size} participants`)
 
-    if (room.gameState.started) {
-      socket.emit("game in progress")
-    } else if (room.participants.size === 2) {
-      room.gameState.started = true
-      console.log(`Starting game in room ${roomId}`)
-      io.to(roomId).emit("start game", {
-        questions: room.gameState.questions,
-        currentQuestion: room.gameState.currentQuestion,
-      })
-    } else {
-      socket.emit("waiting for players")
-    }
+    io.to(roomId).emit("player joined", {
+      playerCount: room.participants.size,
+      maxPlayers: 5,
+    })
 
-    console.log(`User ${socket.id} joined room: ${roomId}`)
+    if (room.participants.size >= 2) {
+      io.to(roomId).emit("can start game")
+    }
+  })
+
+  socket.on("player ready", (roomId) => {
+    const room = rooms.get(roomId)
+    if (!room) return
+
+    room.gameState.readyPlayers.add(socket.id)
+
+    if (room.gameState.readyPlayers.size === room.participants.size && room.participants.size >= 2) {
+      startGame(roomId)
+    } else {
+      io.to(roomId).emit("player ready", {
+        readyCount: room.gameState.readyPlayers.size,
+        totalCount: room.participants.size,
+      })
+    }
+  })
+
+  socket.on("start game request", (roomId) => {
+    const room = rooms.get(roomId)
+    if (!room || room.participants.size < 2) return
+
+    startGame(roomId)
   })
 
   socket.on("submit answer", ({ roomId, questionIndex, answer, time }) => {
@@ -114,8 +147,8 @@ io.on("connection", (socket) => {
       correctAnswer: room.gameState.questions[questionIndex].correct,
     })
 
-    const answeredPlayers = new Set(Object.keys(room.gameState.scores))
-    if (answeredPlayers.size === room.participants.size) {
+    const answeredPlayers = Object.keys(room.gameState.scores).length
+    if (answeredPlayers === room.participants.size) {
       room.gameState.currentQuestion++
 
       if (room.gameState.currentQuestion < room.gameState.questions.length) {
@@ -123,7 +156,7 @@ io.on("connection", (socket) => {
           io.to(roomId).emit("next question", {
             currentQuestion: room.gameState.currentQuestion,
           })
-        }, 2000) 
+        }, 2000)
       } else {
         io.to(roomId).emit("game over", room.gameState.scores)
       }
@@ -135,11 +168,16 @@ io.on("connection", (socket) => {
     for (const [roomId, room] of rooms.entries()) {
       if (room.participants.has(socket.id)) {
         room.participants.delete(socket.id)
+        room.gameState.readyPlayers.delete(socket.id)
         if (room.participants.size === 0) {
           rooms.delete(roomId)
         } else {
+          io.to(roomId).emit("player left", {
+            playerCount: room.participants.size,
+            maxPlayers: 5,
+          })
           if (room.gameState.started) {
-            io.to(roomId).emit("player left")
+            io.to(roomId).emit("player disconnected", socket.id)
           }
         }
         break
@@ -147,6 +185,17 @@ io.on("connection", (socket) => {
     }
   })
 })
+
+function startGame(roomId) {
+  const room = rooms.get(roomId)
+  if (!room) return
+
+  room.gameState.started = true
+  io.to(roomId).emit("start game", {
+    questions: room.gameState.questions,
+    currentQuestion: room.gameState.currentQuestion,
+  })
+}
 
 server.listen(PORT, () => {
   console.log(`Server is running on http://localhost:${PORT}`)

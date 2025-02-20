@@ -1,5 +1,7 @@
+// Import the io function from the Socket.IO client library
 import { io } from "socket.io-client"
 
+// The io function is globally available from the Socket.IO client script
 const socket = io()
 
 let currentQuestion = 0

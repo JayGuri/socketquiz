@@ -89,6 +89,10 @@
             width: calc(100% - 20px);
             margin-bottom: 10px;
         }
+        #waiting-room {
+            text-align: center;
+            margin-top: 20px;
+        }
     </style>
 </head>
 <body>
@@ -97,6 +101,11 @@
         <div id="room-join">
             <input type="text" id="room-id" placeholder="Enter Room ID">
             <button id="join-room-btn">Join Room</button>
+        </div>
+        <div id="waiting-room" style="display: none;">
+            <p>Waiting for players... <span id="player-count"></span></p>
+            <button id="ready-btn">I'm Ready</button>
+            <button id="start-game-btn" style="display: none;">Start Game</button>
         </div>
         <div id="quiz" style="display: none;">
             <div class="question-counter"></div>
@@ -107,15 +116,14 @@
         <div id="leaderboard"></div>
     </div>
     <script>
-        // Initialize socket connection
         const socket = io();
 
         let currentQuestion = 0;
         let startTime;
         let quizQuestions;
         let hasAnswered = false;
+        let currentRoomId = null;
 
-        // Log connection status
         socket.on('connect', () => {
             console.log('Connected to server with ID:', socket.id);
         });
@@ -127,6 +135,12 @@
         document.addEventListener('DOMContentLoaded', () => {
             const joinRoomBtn = document.getElementById('join-room-btn');
             joinRoomBtn.addEventListener('click', joinRoom);
+
+            const readyBtn = document.getElementById('ready-btn');
+            readyBtn.addEventListener('click', playerReady);
+
+            const startGameBtn = document.getElementById('start-game-btn');
+            startGameBtn.addEventListener('click', requestStartGame);
         });
 
         function joinRoom() {
@@ -137,37 +151,59 @@
             }
             console.log(`Attempting to join room: ${roomId}`);
             socket.emit('join room', roomId);
+            currentRoomId = roomId;
             document.getElementById('room-join').style.display = 'none';
-            
-            // Add room info
-            const roomInfo = document.createElement('div');
-            roomInfo.className = 'room-info';
-            roomInfo.textContent = `Room: ${roomId} - Connecting...`;
-            document.getElementById('quiz').before(roomInfo);
+            document.getElementById('waiting-room').style.display = 'block';
         }
 
-        socket.on('waiting for players', () => {
-            console.log('Waiting for other players to join');
-            document.querySelector('.room-info').textContent = 'Waiting for other players to join...';
+        function playerReady() {
+            socket.emit('player ready', currentRoomId);
+            document.getElementById('ready-btn').disabled = true;
+        }
+
+        function requestStartGame() {
+            socket.emit('start game request', currentRoomId);
+        }
+
+        socket.on('player joined', ({ playerCount, maxPlayers }) => {
+            document.getElementById('player-count').textContent = `${playerCount}/${maxPlayers} players`;
+        });
+
+        socket.on('can start game', () => {
+            document.getElementById('start-game-btn').style.display = 'block';
+        });
+
+        socket.on('player ready', ({ readyCount, totalCount }) => {
+            document.getElementById('player-count').textContent = `${readyCount}/${totalCount} players ready`;
+        });
+
+        socket.on('room full', () => {
+            alert('This room is full. Please try another room.');
+            document.getElementById('room-join').style.display = 'block';
+            document.getElementById('waiting-room').style.display = 'none';
         });
 
         socket.on('game in progress', () => {
-            console.log('Game already in progress');
-            document.querySelector('.room-info').textContent = 'Game already in progress. Please wait for the next game.';
+            alert('Game already in progress. Please try another room.');
+            document.getElementById('room-join').style.display = 'block';
+            document.getElementById('waiting-room').style.display = 'none';
         });
 
-        socket.on('player left', () => {
-            console.log('Other player left the game');
-            document.querySelector('.room-info').textContent = 'Other player left the game. Game ended.';
-            document.getElementById('quiz').style.display = 'none';
+        socket.on('player left', ({ playerCount, maxPlayers }) => {
+            document.getElementById('player-count').textContent = `${playerCount}/${maxPlayers} players`;
+        });
+
+        socket.on('player disconnected', (playerId) => {
+            console.log(`Player ${playerId} disconnected`);
+            // You might want to update the UI to reflect this
         });
 
         socket.on('start game', ({ questions, currentQuestion: startQuestion }) => {
             console.log('Game started');
             quizQuestions = questions;
             currentQuestion = startQuestion;
+            document.getElementById('waiting-room').style.display = 'none';
             document.getElementById('quiz').style.display = 'block';
-            document.querySelector('.room-info').textContent = 'Game Started!';
             showQuestion(questions[currentQuestion]);
         });
 
@@ -201,7 +237,7 @@
             
             const time = Date.now() - startTime;
             socket.emit('submit answer', {
-                roomId: document.getElementById('room-id').value,
+                roomId: currentRoomId,
                 questionIndex: currentQuestion,
                 answer: answerIndex,
                 time: time
@@ -227,7 +263,8 @@
 
         socket.on('game over', (finalScores) => {
             document.getElementById('quiz').style.display = 'none';
-            document.querySelector('.room-info').textContent = 'Game Over!';
+            document.getElementById('waiting-room').style.display = 'block';
+            document.getElementById('player-count').textContent = 'Game Over!';
             updateLeaderboard(finalScores, true);
         });
 
