@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Quiz App</title>
+    <script src="/socket.io/socket.io.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            background-color: #f0f0f0;
+        }
+        #app {
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+            max-width: 600px;
+            width: 100%;
+        }
+        button {
+            margin: 5px;
+            padding: 10px;
+            cursor: pointer;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            width: 100%;
+            transition: background-color 0.3s;
+        }
+        button:hover:not(:disabled) {
+            background-color: #45a049;
+        }
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        #leaderboard {
+            margin-top: 20px;
+            padding: 10px;
+            background-color: #f8f9fa;
+            border-radius: 4px;
+        }
+        .room-info {
+            margin-bottom: 20px;
+            color: #666;
+            text-align: center;
+            padding: 10px;
+            background-color: #e9ecef;
+            border-radius: 4px;
+        }
+        .correct {
+            background-color: #28a745 !important;
+        }
+        .incorrect {
+            background-color: #dc3545 !important;
+        }
+        .answer-feedback {
+            text-align: center;
+            margin: 10px 0;
+            padding: 10px;
+            border-radius: 4px;
+        }
+        .player-score {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px;
+            margin: 4px 0;
+            background-color: #fff;
+            border-radius: 4px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        .question-counter {
+            text-align: right;
+            color: #666;
+            margin-bottom: 10px;
+        }
+        #room-id {
+            padding: 8px;
+            margin-right: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            width: calc(100% - 20px);
+            margin-bottom: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <h1 style="text-align: center;">Quiz App</h1>
+        <div id="room-join">
+            <input type="text" id="room-id" placeholder="Enter Room ID">
+            <button id="join-room-btn">Join Room</button>
+        </div>
+        <div id="quiz" style="display: none;">
+            <div class="question-counter"></div>
+            <h2 id="question" style="text-align: center;"></h2>
+            <div id="options"></div>
+            <div class="answer-feedback"></div>
+        </div>
+        <div id="leaderboard"></div>
+    </div>
+    <script>
+        // Initialize socket connection
+        const socket = io();
+
+        let currentQuestion = 0;
+        let startTime;
+        let quizQuestions;
+        let hasAnswered = false;
+
+        // Log connection status
+        socket.on('connect', () => {
+            console.log('Connected to server with ID:', socket.id);
+        });
+
+        socket.on('connect_error', (error) => {
+            console.error('Connection error:', error);
+        });
+
+        document.addEventListener('DOMContentLoaded', () => {
+            const joinRoomBtn = document.getElementById('join-room-btn');
+            joinRoomBtn.addEventListener('click', joinRoom);
+        });
+
+        function joinRoom() {
+            const roomId = document.getElementById('room-id').value;
+            if (!roomId.trim()) {
+                alert('Please enter a room ID');
+                return;
+            }
+            console.log(`Attempting to join room: ${roomId}`);
+            socket.emit('join room', roomId);
+            document.getElementById('room-join').style.display = 'none';
+            
+            // Add room info
+            const roomInfo = document.createElement('div');
+            roomInfo.className = 'room-info';
+            roomInfo.textContent = `Room: ${roomId} - Connecting...`;
+            document.getElementById('quiz').before(roomInfo);
+        }
+
+        socket.on('waiting for players', () => {
+            console.log('Waiting for other players to join');
+            document.querySelector('.room-info').textContent = 'Waiting for other players to join...';
+        });
+
+        socket.on('game in progress', () => {
+            console.log('Game already in progress');
+            document.querySelector('.room-info').textContent = 'Game already in progress. Please wait for the next game.';
+        });
+
+        socket.on('player left', () => {
+            console.log('Other player left the game');
+            document.querySelector('.room-info').textContent = 'Other player left the game. Game ended.';
+            document.getElementById('quiz').style.display = 'none';
+        });
+
+        socket.on('start game', ({ questions, currentQuestion: startQuestion }) => {
+            console.log('Game started');
+            quizQuestions = questions;
+            currentQuestion = startQuestion;
+            document.getElementById('quiz').style.display = 'block';
+            document.querySelector('.room-info').textContent = 'Game Started!';
+            showQuestion(questions[currentQuestion]);
+        });
+
+        socket.on('next question', ({ currentQuestion: nextQuestion }) => {
+            currentQuestion = nextQuestion;
+            hasAnswered = false;
+            showQuestion(quizQuestions[currentQuestion]);
+            document.querySelector('.answer-feedback').textContent = '';
+        });
+
+        function showQuestion(question) {
+            document.querySelector('.question-counter').textContent = 
+                `Question ${currentQuestion + 1} of ${quizQuestions.length}`;
+            
+            document.getElementById('question').textContent = question.question;
+            const optionsDiv = document.getElementById('options');
+            optionsDiv.innerHTML = '';
+            startTime = Date.now();
+
+            question.options.forEach((option, index) => {
+                const button = document.createElement('button');
+                button.textContent = option;
+                button.addEventListener('click', () => submitAnswer(index));
+                optionsDiv.appendChild(button);
+            });
+        }
+
+        function submitAnswer(answerIndex) {
+            if (hasAnswered) return;
+            hasAnswered = true;
+            
+            const time = Date.now() - startTime;
+            socket.emit('submit answer', {
+                roomId: document.getElementById('room-id').value,
+                questionIndex: currentQuestion,
+                answer: answerIndex,
+                time: time
+            });
+            
+            // Disable all buttons after answer is submitted
+            const buttons = document.querySelectorAll('#options button');
+            buttons.forEach(button => button.disabled = true);
+        }
+
+        socket.on('answer result', ({ playerId, scores, isCorrect, correctAnswer }) => {
+            // Show correct/incorrect feedback
+            const buttons = document.querySelectorAll('#options button');
+            buttons[correctAnswer].classList.add('correct');
+            
+            const feedbackDiv = document.querySelector('.answer-feedback');
+            feedbackDiv.textContent = isCorrect ? 'Correct!' : 'Incorrect!';
+            feedbackDiv.style.backgroundColor = isCorrect ? '#d4edda' : '#f8d7da';
+            feedbackDiv.style.color = isCorrect ? '#155724' : '#721c24';
+
+            updateLeaderboard(scores);
+        });
+
+        socket.on('game over', (finalScores) => {
+            document.getElementById('quiz').style.display = 'none';
+            document.querySelector('.room-info').textContent = 'Game Over!';
+            updateLeaderboard(finalScores, true);
+        });
+
+        function updateLeaderboard(scores, isFinal = false) {
+            const leaderboard = document.getElementById('leaderboard');
+            leaderboard.innerHTML = `<h3>${isFinal ? 'Final Scores' : 'Current Scores'}</h3>`;
+            
+            Object.entries(scores)
+                .sort(([, a], [, b]) => b - a)
+                .forEach(([playerId, score], index) => {
+                    const playerRow = document.createElement('div');
+                    playerRow.className = 'player-score';
+                    if (index === 0) playerRow.style.backgroundColor = '#fff3cd';
+                    
+                    const isCurrentPlayer = playerId === socket.id;
+                    playerRow.innerHTML = `
+                        <span><strong>${index + 1}.</strong> 
+                        ${isCurrentPlayer ? 'You' : 'Player ' + playerId.slice(0, 4)}</span>
+                        <span>${score} points</span>
+                    `;
+                    leaderboard.appendChild(playerRow);
+                });
+        }
+    </script>
+</body>
+</html>
+

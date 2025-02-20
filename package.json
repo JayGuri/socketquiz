@@ -1,0 +1,18 @@
+{
+  "name": "quiz-app",
+  "version": "1.0.0",
+  "description": "A real-time quiz app using Socket.IO",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "keywords": ["quiz", "socket.io", "real-time"],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "express": "^4.17.1",
+    "socket.io": "^4.3.1"
+  }
+}
+
